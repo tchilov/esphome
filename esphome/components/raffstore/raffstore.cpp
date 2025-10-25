@@ -12,29 +12,24 @@ namespace raffstore {
 
 static const char *TAG = "raffstore.cover";
 
-int tiltPositionAction;
-#define TILPOS_IDLE 0
-#define TILPOS_TILTING 1
-#define TILPOS_POSITIONING 2
-
 void Raffstore::dump_config() {
   LOG_COVER("", "Raffstore", this);
   ESP_LOGCONFIG(TAG,
                 "  Open Duration: %.1fs\n"
                 "  Close Duration: %.1fs\n"
-                "  Full Tilt Duration: %.1fs",
-                this->open_duration_ / 1e3f, this->close_duration_ / 1e3f, this->full_tilt_duration_ / 1e3f);
+                "  Full Tilt Duration: %.1fs\n",
+                "  Interlock Wait Time: %.1fs", this->open_duration_ / 1e3f, this->close_duration_ / 1e3f,
+                this->full_tilt_duration_ / 1e3f, this->interlock_wait_time_ / 1e3f);
 }
 
 void Raffstore::setup() {
-  // open duration shorter than it actually is will prevent the motor going into overcurrent
-  // start fully open so to find its home the cover will close.
-  // this way we will never hit the mechanical open limit
+  // start fully open so the cover will close all the way for homing.
+  // open duration set shorter than it actually is prevents the motor going into overcurrent
   this->position = esphome::cover::COVER_OPEN;
 }
 
 void Raffstore::loop() {
-  if (this->current_operation == esphome::cover::COVER_OPERATION_IDLE)
+  if (this->current_operation == esphome::cover::COVER_OPERATION_IDLE && this->interlock_wait_begin_ == 0)
     return;
 
   const uint32_t now = App.get_loop_component_start_time();
@@ -50,21 +45,42 @@ void Raffstore::loop() {
     } else {
       this->start_direction_(esphome::cover::COVER_OPERATION_IDLE);
     }
-    this->publish_state();
 
-    if (tiltPositionAction == TILPOS_TILTING) {
+    if (this->tilt_position_action == TILT_POSITION_ACTION_TILTING) {
+      // we are at target position and have reached target tilt
       this->tilt = this->target_tilt_;
-    } else if (tiltPositionAction != TILPOS_TILTING && (this->tilt != this->target_tilt_)) {
+
+    } else if (this->tilt_position_action != TILT_POSITION_ACTION_TILTING && (this->tilt != this->target_tilt_)) {
+      // we are at target position but aren't moving towards target tilt yet
+
+      if (this->interlock_wait_begin_ == 0) {
+        // if we aren't waiting for the interlock yet, start waiting now
+        this->interlock_wait_begin_ = now;
+        return;
+      }
+
+      if (now - this->interlock_wait_begin_ < this->interlock_wait_time_) {
+        // interlock wait time isn't over yet, exit loop before we start moving
+        return;
+
+      } else {
+        // interlock wait time is over, start moving
+        this->interlock_wait_begin_ = 0;
+      }
+
       if (this->last_operation_ == esphome::cover::COVER_OPERATION_CLOSING) {
         this->start_direction_(esphome::cover::COVER_OPERATION_OPENING);
       } else if (this->last_operation_ == esphome::cover::COVER_OPERATION_OPENING) {
         this->start_direction_(esphome::cover::COVER_OPERATION_CLOSING);
       }
 
-      tiltPositionAction = TILPOS_TILTING;
+      this->tilt_position_action = TILT_POSITION_ACTION_TILTING;
+
     } else {
-      tiltPositionAction = TILPOS_IDLE;
+      this->tilt_position_action = TILT_POSITION_ACTION_IDLE;
     }
+
+    this->publish_state();
   }
 
   // Send current position every 100 ms
@@ -114,10 +130,10 @@ void Raffstore::control(const cover::CoverCall &call) {
     this->target_tilt_ = tilt;
 
     if (this->target_tilt_ > this->tilt) {
-      tiltPositionAction = TILPOS_TILTING;
+      this->tilt_position_action = TILT_POSITION_ACTION_TILTING;
       this->start_direction_(esphome::cover::COVER_OPERATION_OPENING);
     } else if (this->target_tilt_ < this->tilt) {
-      tiltPositionAction = TILPOS_TILTING;
+      this->tilt_position_action = TILT_POSITION_ACTION_TILTING;
       this->start_direction_(esphome::cover::COVER_OPERATION_CLOSING);
     }
   }
@@ -154,7 +170,7 @@ void Raffstore::control(const cover::CoverCall &call) {
 
       this->target_position_ = pos;
       this->start_direction_(op);
-      tiltPositionAction = TILPOS_POSITIONING;
+      this->tilt_position_action = TILT_POSITION_ACTION_POSITIONING;
     }
   }
 }
@@ -168,14 +184,14 @@ void Raffstore::stop_prev_trigger_() {
 
 bool Raffstore::is_at_target_() const {
   if (this->current_operation == esphome::cover::COVER_OPERATION_OPENING) {
-    if (tiltPositionAction == TILPOS_POSITIONING)
+    if (this->tilt_position_action == TILT_POSITION_ACTION_POSITIONING)
       return this->position >= this->target_position_;
-    else if (tiltPositionAction == TILPOS_TILTING)
+    else if (this->tilt_position_action == TILT_POSITION_ACTION_TILTING)
       return this->tilt >= this->target_tilt_;
   } else if (this->current_operation == esphome::cover::COVER_OPERATION_CLOSING) {
-    if (tiltPositionAction == TILPOS_POSITIONING)
+    if (this->tilt_position_action == TILT_POSITION_ACTION_POSITIONING)
       return this->position <= this->target_position_;
-    else if (tiltPositionAction == TILPOS_TILTING)
+    else if (this->tilt_position_action == TILT_POSITION_ACTION_TILTING)
       return this->tilt <= this->target_tilt_;
   }
 

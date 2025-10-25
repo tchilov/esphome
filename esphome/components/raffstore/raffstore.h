@@ -7,6 +7,10 @@
 namespace esphome {
 namespace raffstore {
 
+#define TILT_POSITION_ACTION_IDLE 0
+#define TILT_POSITION_ACTION_TILTING 1
+#define TILT_POSITION_ACTION_POSITIONING 2
+
 class Raffstore : public cover::Cover, public Component {
  public:
   void setup() override;
@@ -20,6 +24,7 @@ class Raffstore : public cover::Cover, public Component {
   void set_open_duration(uint32_t open_duration) { this->open_duration_ = open_duration; }
   void set_close_duration(uint32_t close_duration) { this->close_duration_ = close_duration; }
   void set_full_tilt_duration(uint32_t full_tilt_duration) { this->full_tilt_duration_ = full_tilt_duration; }
+  void set_interlock_wait_time(uint32_t interlock_wait_time) { this->interlock_wait_time_ = interlock_wait_time; }
   cover::CoverTraits get_traits() override;
   void set_has_built_in_endstop(bool value) { this->has_built_in_endstop_ = value; }
   void set_manual_control(bool value) { this->manual_control_ = value; }
@@ -40,7 +45,10 @@ class Raffstore : public cover::Cover, public Component {
   Trigger<> *close_trigger_{new Trigger<>()};
   uint32_t close_duration_;
   Trigger<> *stop_trigger_{new Trigger<>()};
-  uint32_t full_tilt_duration_;
+
+  uint32_t full_tilt_duration_{0};
+  uint32_t interlock_wait_time_{0};
+  uint32_t interlock_wait_begin_{0};
 
   Trigger<> *prev_command_trigger_{nullptr};
   uint32_t last_recompute_time_{0};
@@ -52,6 +60,7 @@ class Raffstore : public cover::Cover, public Component {
   bool manual_control_{false};
   bool assumed_state_{false};
   cover::CoverOperation last_operation_{cover::COVER_OPERATION_OPENING};
+  int tilt_position_action{0};
 };
 
 }  // namespace raffstore
