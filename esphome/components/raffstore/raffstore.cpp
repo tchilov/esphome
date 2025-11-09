@@ -68,9 +68,10 @@ void Raffstore::loop() {
         this->interlock_wait_begin_ = 0;
       }
 
-      if (this->last_operation_ == esphome::cover::COVER_OPERATION_CLOSING) {
+      // do not restore tilt if fully opened/fully closed
+      if (this->last_operation_ == esphome::cover::COVER_OPERATION_CLOSING && this->position > 0.05f) {
         this->start_direction_(esphome::cover::COVER_OPERATION_OPENING);
-      } else if (this->last_operation_ == esphome::cover::COVER_OPERATION_OPENING) {
+      } else if (this->last_operation_ == esphome::cover::COVER_OPERATION_OPENING && this->position < 0.95f) {
         this->start_direction_(esphome::cover::COVER_OPERATION_CLOSING);
       }
 
