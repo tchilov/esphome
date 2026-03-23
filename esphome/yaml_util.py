@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import suppress
 import functools
 import inspect
 from io import BytesIO, TextIOBase, TextIOWrapper
@@ -23,6 +24,7 @@ except ImportError:
 
 from esphome import core
 from esphome.config_helpers import Extend, Remove
+from esphome.const import CONF_DEFAULTS
 from esphome.core import (
     CORE,
     DocumentRange,
@@ -85,6 +87,47 @@ def make_data_base(
     except TypeError:
         # Adding class failed, ignore error
         return value
+
+
+class ConfigContext:
+    """This is a mixin class that holds substitution vars that should be applied
+    to the tagged node and its children. During configuration loading, context vars can
+    be added to nodes using `add_context` function, which applies the mixin storing
+    the captured values and unevaluated expressions.
+    The substitution pass then recreates the effective context by merging the context vars
+    from this node and parent nodes.
+    """
+
+    @property
+    def vars(self) -> dict[str, Any]:
+        return self._context_vars
+
+    def set_context(self, vars: dict[str, Any]) -> None:
+        # pylint: disable=attribute-defined-outside-init
+        self._context_vars = vars
+
+
+def add_context(value: Any, context_vars: dict[str, Any] | None) -> Any:
+    """Tags a list/string/dict value with context vars that must be applied to it and its children
+    during the substitution pass. If no vars are given, no tagging is done.
+    If the value is already tagged, the new context vars are merged with existing ones,
+    with new vars taking precedence. Returns the value tagged with ConfigContext. Returns
+    the original value if value is not a list/string/dict.
+    """
+    if isinstance(value, dict) and CONF_DEFAULTS in value:
+        context_vars = {
+            **value.pop(CONF_DEFAULTS),
+            **(context_vars or {}),
+        }
+
+    if isinstance(value, ConfigContext):
+        value.set_context({**value.vars, **(context_vars or {})})
+        return value
+
+    if context_vars and isinstance(value, (dict, list, str)):
+        value = add_class_to_obj(value, ConfigContext)
+        value.set_context(context_vars)
+    return value
 
 
 def _add_data_ref(fn):
@@ -454,7 +497,7 @@ def parse_yaml(
 
 def substitute_vars(config, vars):
     from esphome.components import substitutions
-    from esphome.const import CONF_DEFAULTS, CONF_SUBSTITUTIONS
+    from esphome.const import CONF_SUBSTITUTIONS
 
     org_subs = None
     result = config
@@ -501,13 +544,17 @@ def _load_yaml_internal_with_type(
         loader.dispose()
 
 
-def dump(dict_, show_secrets=False):
+def dump(dict_, show_secrets=False, sort_keys=False):
     """Dump YAML to a string and remove null."""
     if show_secrets:
         _SECRET_VALUES.clear()
         _SECRET_CACHE.clear()
     return yaml.dump(
-        dict_, default_flow_style=False, allow_unicode=True, Dumper=ESPHomeDumper
+        dict_,
+        default_flow_style=False,
+        allow_unicode=True,
+        Dumper=ESPHomeDumper,
+        sort_keys=sort_keys,
     )
 
 
@@ -543,6 +590,9 @@ class ESPHomeDumper(yaml.SafeDumper):
         best_style = True
         if hasattr(mapping, "items"):
             mapping = list(mapping.items())
+        if self.sort_keys:
+            with suppress(TypeError):
+                mapping = sorted(mapping)
         for item_key, item_value in mapping:
             node_key = self.represent_data(item_key)
             node_value = self.represent_data(item_value)
@@ -604,6 +654,12 @@ class ESPHomeDumper(yaml.SafeDumper):
             return self.represent_secret(value.value)
         return self.represent_scalar(tag="!lambda", value=value.value, style="|")
 
+    def represent_extend(self, value):
+        return self.represent_scalar(tag="!extend", value=value.value)
+
+    def represent_remove(self, value):
+        return self.represent_scalar(tag="!remove", value=value.value)
+
     def represent_id(self, value):
         if is_secret(value.id):
             return self.represent_secret(value.id)
@@ -630,6 +686,8 @@ ESPHomeDumper.add_multi_representer(_BaseNetwork, ESPHomeDumper.represent_string
 ESPHomeDumper.add_multi_representer(MACAddress, ESPHomeDumper.represent_stringify)
 ESPHomeDumper.add_multi_representer(TimePeriod, ESPHomeDumper.represent_stringify)
 ESPHomeDumper.add_multi_representer(Lambda, ESPHomeDumper.represent_lambda)
+ESPHomeDumper.add_multi_representer(Extend, ESPHomeDumper.represent_extend)
+ESPHomeDumper.add_multi_representer(Remove, ESPHomeDumper.represent_remove)
 ESPHomeDumper.add_multi_representer(core.ID, ESPHomeDumper.represent_id)
 ESPHomeDumper.add_multi_representer(uuid.UUID, ESPHomeDumper.represent_stringify)
 ESPHomeDumper.add_multi_representer(Path, ESPHomeDumper.represent_stringify)
